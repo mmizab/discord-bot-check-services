@@ -1,0 +1,47 @@
+name: Service Status Monitor
+on:
+  schedule:
+    - cron: '*/15 * * * *' # Runs every 15 minutes
+  workflow_dispatch:      # Allows you to run it manually for testing
+
+jobs:
+  check-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Services and Notify Discord
+        shell: python
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          import requests
+          import os
+
+          # Define services and their status JSON endpoints
+          # Most of these use the "Atlassian Statuspage" format
+          services = {
+              "Discord": "https://discordstatus.com/api/v2/summary.json",
+              "Jira": "https://status.atlassian.com/api/v2/summary.json",
+              "Figma": "https://status.figma.com/api/v2/summary.json",
+              "Webflow": "https://status.webflow.com/api/v2/summary.json"
+          }
+
+          webhook_url = os.environ['DISCORD_WEBHOOK']
+          issues = []
+
+          for name, url in services.items():
+              try:
+                  response = requests.get(url).json()
+                  status = response['status']['description']
+                  if status != "All Systems Operational":
+                      issues.append(f"‚ö†Ô∏è **{name}**: {status}")
+              except Exception as e:
+                  issues.append(f"‚ùå **{name}**: Failed to fetch status ({e})")
+
+          # Send to Discord only if there's an issue
+          if issues:
+              payload = {
+                  "content": "Ì∫® **Service Status Alert** Ì∫®\n" + "\n".join(issues)
+              }
+              requests.post(webhook_url, json=payload)
+          else:
+              print("All services are healthy.")
