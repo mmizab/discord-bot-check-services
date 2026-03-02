@@ -29,8 +29,8 @@ jobs:
         run: |
           import requests
           import os
-          import sys
 
+          # Standard JSON-based status pages
           services = {
               "Discord": "https://discordstatus.com/api/v2/summary.json",
               "Jira": "https://status.atlassian.com/api/v2/summary.json",
@@ -40,9 +40,10 @@ jobs:
 
           webhook_url = os.getenv('DISCORD_WEBHOOK')
           is_weekly = os.getenv('IS_WEEKLY') == 'true'
-          headers = {'User-Agent': 'Mozilla/5.0'}
+          headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
           issues = []
 
+          # 1. Check Standard JSON Services
           for name, url in services.items():
               try:
                   r = requests.get(url, headers=headers, timeout=15)
@@ -51,14 +52,40 @@ jobs:
                       desc = data.get('status', {}).get('description', 'Unknown')
                       if desc != "All Systems Operational":
                           issues.append(f"**{name}**: {desc}")
-                  else:
-                      issues.append(f"**{name}**: Status Code {r.status_code}")
               except Exception:
                   issues.append(f"**{name}**: Connection Error")
 
+          # 2. Check Google Workspace (Incident-based JSON)
+          try:
+              google_url = "https://www.google.com/appsstatus/dashboard/incidents.json"
+              g_r = requests.get(google_url, headers=headers, timeout=15)
+              if g_r.status_code == 200:
+                  incidents = g_r.json()
+                  # Filter for incidents that are NOT 'AVAILABLE' (resolved)
+                  active_google_issues = [
+                      f"{i.get('service_name')}: {i.get('status_impact')}" 
+                      for i in incidents 
+                      if i.get('most_recent_update', {}).get('status') != 'AVAILABLE'
+                  ]
+                  if active_google_issues:
+                      issues.append(f"**Google**: {', '.join(active_google_issues)}")
+          except Exception as e:
+              issues.append(f"**Google**: Connection Error")
+
+          # 3. Check Microsoft Cloud Status (HTML Search)
+          try:
+              ms_url = "https://status.cloud.microsoft/?azure-portal=true"
+              ms_target = "All products are operational"
+              ms_r = requests.get(ms_url, headers=headers, timeout=15)
+              if ms_target not in ms_r.text:
+                  issues.append(f"**Microsoft**: Status does not show '{ms_target}'")
+          except Exception:
+              issues.append("**Microsoft**: Connection Error")
+
+          # 4. Handle Notifications
           if issues:
-              message = "SERVICE STATUS ALERT\n" + "\n".join(issues)
+              message = "⚠️ **SERVICE STATUS ALERT** ⚠️\n" + "\n".join(issues)
               requests.post(webhook_url, json={"content": message})
           elif is_weekly:
-              message = "Weekly Status Report: All third party systems are operational."
+              message = "✅ **Weekly Status Report**: All systems (Discord, Jira, Figma, Webflow, Google, and Microsoft) are operational."
               requests.post(webhook_url, json={"content": message})
