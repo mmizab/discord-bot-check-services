@@ -29,8 +29,8 @@ jobs:
         run: |
           import requests
           import os
+          import xml.etree.ElementTree as ET
 
-          # Standard JSON-based status pages
           services = {
               "Discord": "https://discordstatus.com/api/v2/summary.json",
               "Jira": "https://status.atlassian.com/api/v2/summary.json",
@@ -43,7 +43,7 @@ jobs:
           headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
           issues = []
 
-          # 1. Check Standard JSON Services
+          # 1. Standard JSON Services
           for name, url in services.items():
               try:
                   r = requests.get(url, headers=headers, timeout=15)
@@ -55,13 +55,12 @@ jobs:
               except Exception:
                   issues.append(f"**{name}**: Connection Error")
 
-          # 2. Check Google Workspace (Incident-based JSON)
+          # 2. Google Workspace
           try:
               google_url = "https://www.google.com/appsstatus/dashboard/incidents.json"
               g_r = requests.get(google_url, headers=headers, timeout=15)
               if g_r.status_code == 200:
                   incidents = g_r.json()
-                  # Filter for incidents that are NOT 'AVAILABLE' (resolved)
                   active_google_issues = [
                       f"{i.get('service_name')}: {i.get('status_impact')}" 
                       for i in incidents 
@@ -69,18 +68,34 @@ jobs:
                   ]
                   if active_google_issues:
                       issues.append(f"**Google**: {', '.join(active_google_issues)}")
-          except Exception as e:
-              issues.append(f"**Google**: Connection Error")
-
-          # 3. Check Microsoft Cloud Status (HTML Search)
-          try:
-              ms_url = "https://status.cloud.microsoft/?azure-portal=true"
-              ms_target = "All products are operational"
-              ms_r = requests.get(ms_url, headers=headers, timeout=15)
-              if ms_target not in ms_r.text:
-                  issues.append(f"**Microsoft**: Status does not show '{ms_target}'")
           except Exception:
-              issues.append("**Microsoft**: Connection Error")
+              issues.append("**Google**: Connection Error")
+
+          # 3. Microsoft Cloud (Using the provided XML structure)
+          try:
+              ms_xml_url = "https://admin.microsoft.com/api/servicestatus/index"
+              ms_r = requests.get(ms_xml_url, headers=headers, timeout=15)
+              if ms_r.status_code == 200:
+                  root = ET.fromstring(ms_r.content)
+                  
+                  # Shortcut check: IsAllUp
+                  is_all_up = root.find('IsAllUp')
+                  if is_all_up is not None and is_all_up.text.lower() != 'true':
+                      # Find which specific services are down
+                      ms_issues = []
+                      for service in root.findall('.//Service'):
+                          name = service.find('Name').text
+                          is_up = service.find('IsUp').text
+                          if is_up.lower() == 'false':
+                              ms_issues.append(name)
+                      
+                      if ms_issues:
+                          issues.append(f"**Microsoft**: Issues in {', '.join(ms_issues)}")
+                      else:
+                          # Fallback if IsAllUp is false but no specific service is marked false
+                          issues.append("**Microsoft**: General service interruption reported")
+          except Exception as e:
+              issues.append(f"**Microsoft**: Connection/Parsing Error")
 
           # 4. Handle Notifications
           if issues:
