@@ -29,7 +29,6 @@ jobs:
         run: |
           import requests
           import os
-          import xml.etree.ElementTree as ET
 
           services = {
               "Discord": "https://discordstatus.com/api/v2/summary.json",
@@ -71,31 +70,23 @@ jobs:
           except Exception:
               issues.append("**Google**: Connection Error")
 
-          # 3. Microsoft Cloud (Using the provided XML structure)
+          # 3. Microsoft Cloud (Fixed to use JSON)
           try:
-              ms_xml_url = "https://admin.microsoft.com/api/servicestatus/index"
-              ms_r = requests.get(ms_xml_url, headers=headers, timeout=15)
+              ms_url = "https://admin.microsoft.com/api/servicestatus/index"
+              ms_r = requests.get(ms_url, headers=headers, timeout=15)
               if ms_r.status_code == 200:
-                  root = ET.fromstring(ms_r.content)
-                  
-                  # Shortcut check: IsAllUp
-                  is_all_up = root.find('IsAllUp')
-                  if is_all_up is not None and is_all_up.text.lower() != 'true':
-                      # Find which specific services are down
-                      ms_issues = []
-                      for service in root.findall('.//Service'):
-                          name = service.find('Name').text
-                          is_up = service.find('IsUp').text
-                          if is_up.lower() == 'false':
-                              ms_issues.append(name)
-                      
+                  data = ms_r.json()
+                  if not data.get('IsAllUp', True):
+                      ms_issues = [
+                          s.get('Name') for s in data.get('Services', []) 
+                          if s.get('IsUp') is False
+                      ]
                       if ms_issues:
                           issues.append(f"**Microsoft**: Issues in {', '.join(ms_issues)}")
                       else:
-                          # Fallback if IsAllUp is false but no specific service is marked false
                           issues.append("**Microsoft**: General service interruption reported")
-          except Exception as e:
-              issues.append(f"**Microsoft**: Connection/Parsing Error")
+          except Exception:
+              issues.append("**Microsoft**: Connection/Parsing Error")
 
           # 4. Handle Notifications
           if issues:
