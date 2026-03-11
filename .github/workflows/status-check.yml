@@ -1,40 +1,21 @@
-name: Service Status Monitor
-
-on:
-  schedule:
-    - cron: '*/15 * * * *' # Every 15 minutes
-    - cron: '0 9 * * 1'    # Every Monday at 9:00 AM UTC
-  workflow_dispatch:
-
-jobs:
-  check-status:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Run status check
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          IS_WEEKLY: ${{ github.event.schedule == '0 9 * * 1' || github.event_name == 'workflow_dispatch' }}
-        shell: python
-        run: |
+run: |
           import requests
           import os
 
+          # Configuration
           services = {
               "Discord": "https://discordstatus.com/api/v2/summary.json",
               "Jira": "https://status.atlassian.com/api/v2/summary.json",
               "Figma": "https://status.figma.com/api/v2/summary.json",
               "Webflow": "https://status.webflow.com/api/v2/summary.json"
+          }
+
+          history_links = {
+              "Discord": "https://discordstatus.com/#past-incidents",
+              "Jira": "https://jira-software.status.atlassian.com/#past-incidents",
+              "Figma": "https://status.figma.com/",
+              "Webflow": "https://status.webflow.com/history",
+              "Bitbucket": "https://bitbucket.status.atlassian.com/#past-incidents"
           }
 
           webhook_url = os.getenv('DISCORD_WEBHOOK')
@@ -50,7 +31,8 @@ jobs:
                       data = r.json()
                       desc = data.get('status', {}).get('description', 'Unknown')
                       if desc != "All Systems Operational":
-                          issues.append(f"**{name}**: {desc}")
+                          link = history_links.get(name, "")
+                          issues.append(f"**{name}**: {desc}\n   [View History]({link})")
               except Exception:
                   issues.append(f"**{name}**: Connection Error")
 
@@ -66,32 +48,28 @@ jobs:
                       if i.get('most_recent_update', {}).get('status') != 'AVAILABLE'
                   ]
                   if active_google_issues:
-                      issues.append(f"**Google**: {', '.join(active_google_issues)}")
+                      issues.append(f"**Google**: {', '.join(active_google_issues)}\n   [View History](https://www.google.com/appsstatus)")
           except Exception:
               issues.append("**Google**: Connection Error")
 
-          # 3. Microsoft Cloud (Fixed to use JSON)
+          # 3. Microsoft Cloud
           try:
               ms_url = "https://admin.microsoft.com/api/servicestatus/index"
               ms_r = requests.get(ms_url, headers=headers, timeout=15)
               if ms_r.status_code == 200:
                   data = ms_r.json()
                   if not data.get('IsAllUp', True):
-                      ms_issues = [
-                          s.get('Name') for s in data.get('Services', []) 
-                          if s.get('IsUp') is False
-                      ]
-                      if ms_issues:
-                          issues.append(f"**Microsoft**: Issues in {', '.join(ms_issues)}")
-                      else:
-                          issues.append("**Microsoft**: General service interruption reported")
+                      ms_issues = [s.get('Name') for s in data.get('Services', []) if s.get('IsUp') is False]
+                      msg = f"**Microsoft**: Issues in {', '.join(ms_issues)}" if ms_issues else "**Microsoft**: General service interruption"
+                      issues.append(f"{msg}\n   [View History](https://admin.microsoft.com/servicestatus)")
           except Exception:
               issues.append("**Microsoft**: Connection/Parsing Error")
 
           # 4. Handle Notifications
           if issues:
-              message = "⚠️ **SERVICE STATUS ALERT** ⚠️\n" + "\n".join(issues)
+              message = "⚠️ **SERVICE STATUS ALERT** ⚠️\n\n" + "\n\n".join(issues)
               requests.post(webhook_url, json={"content": message})
           elif is_weekly:
-              message = "✅ **Weekly Status Report**: All systems (Discord, Jira, Figma, Webflow, Google, and Microsoft) are operational."
+              message = "✅ **Weekly Status Report**: All systems are operational.\n"
+              message += "Quick Links: " + ", ".join([f"[{k}]({v})" for k, v in history_links.items()])
               requests.post(webhook_url, json={"content": message})
